@@ -198,6 +198,11 @@ body{font-family:"DM Sans",-apple-system,sans-serif;background:var(--bg);color:v
 .arch-card-tag{font-size:10px;padding:1px 6px;border-radius:8px;background:rgba(0,0,0,.06);color:var(--text2);}
 .arch-card-date{font-size:10px;color:var(--text3);}
 .arch-empty{padding:40px;text-align:center;color:var(--text3);font-size:13px;}
+.arch-year{border-bottom:2px solid var(--border);}
+.arch-year:last-child{border-bottom:none;}
+.arch-year-hdr{padding:16px 20px;display:flex;align-items:center;gap:10px;cursor:pointer;user-select:none;background:rgba(0,0,0,.02);}
+.arch-year-hdr:hover{background:rgba(0,0,0,.04);}
+.arch-year-body{}
 
 /* MODAL */
 .mo{position:fixed;inset:0;background:rgba(0,0,0,.4);z-index:200;display:flex;align-items:flex-start;justify-content:center;opacity:0;pointer-events:none;transition:.2s;padding:20px;overflow-y:auto;}
@@ -927,16 +932,13 @@ function renderArchivo(){
   const box=document.getElementById('arch-box');
   if(!box)return;
   const filtered=tareas.filter(t=>t.estado==='entregada'&&t.asignado===archivoPersona);
-  if(!filtered.length){
-    box.innerHTML='<div class="arch-empty">No hay entregas registradas.</div>';
-    return;
-  }
-  // Group by year→month→week
+
+  // Build tree: year → month(0-11) → week(1-5) → tasks[]
   const tree={};
   filtered.forEach(t=>{
     const raw=t.entregado_at||t.created_at||'';
     const d=new Date(raw);
-    const y=isNaN(d)?2026:d.getFullYear();
+    const y=isNaN(d)?new Date().getFullYear():d.getFullYear();
     const mo=isNaN(d)?0:d.getMonth();
     const wk=isNaN(d)?1:Math.ceil(d.getDate()/7);
     tree[y]=tree[y]||{};
@@ -944,48 +946,82 @@ function renderArchivo(){
     tree[y][mo][wk]=tree[y][mo][wk]||[];
     tree[y][mo][wk].push(t);
   });
+
+  // Show 2026, 2027, 2028 always + any year with data
+  const currentY=new Date().getFullYear();
+  const dataYears=Object.keys(tree).map(Number);
+  const allYears=[...new Set([2026,2027,2028,...dataYears])].sort((a,b)=>b-a);
+
   const barColor=archivoPersona==='borja'?'var(--borja)':'var(--pablo)';
   let html='';
-  Object.keys(tree).sort((a,b)=>b-a).forEach(y=>{
-    Object.keys(tree[y]).sort((a,b)=>a-b).forEach(mo=>{
-      const weeks=tree[y][mo];
-      const total=Object.values(weeks).reduce((s,a)=>s+a.length,0);
+
+  allYears.forEach(y=>{
+    const yearHasData=dataYears.includes(y);
+    // Year header
+    html+=`<div class="arch-year">
+      <div class="arch-year-hdr" onclick="toggleYear('year-${y}')">
+        <span class="arch-mes-arrow" id="arr-year-${y}" style="font-size:14px;">›</span>
+        <span style="font-size:15px;font-weight:700;letter-spacing:-.3px;">${y}</span>
+        <span class="arch-mes-count">${filtered.filter(t=>{const d=new Date(t.entregado_at||t.created_at||'');return !isNaN(d)&&d.getFullYear()===y;}).length}</span>
+      </div>
+      <div class="arch-year-body" id="year-${y}" style="${y===2026?'display:block':'display:none'}">`;
+
+    // Show all 12 months
+    for(let mo=0;mo<12;mo++){
       const mesId=`mes-${y}-${mo}`;
+      const weeks=(tree[y]&&tree[y][mo])||{};
+      const total=Object.values(weeks).reduce((s,a)=>s+a.length,0);
       html+=`<div class="arch-mes">
         <div class="arch-mes-hdr" onclick="toggleMes('${mesId}')">
           <div style="display:flex;align-items:center;gap:10px;">
             <span class="arch-mes-arrow" id="arr-${mesId}">›</span>
-            <span class="arch-mes-title">${MONTHS[mo]} ${y}</span>
-            <span class="arch-mes-count">${total}</span>
+            <span class="arch-mes-title">${MONTHS[mo]}</span>
+            <span class="arch-mes-count" style="${total===0?'opacity:.4':''}">${total}</span>
           </div>
         </div>
         <div class="arch-mes-body" id="${mesId}">`;
-      Object.keys(weeks).sort((a,b)=>a-b).forEach(wk=>{
-        const tasks=weeks[wk];
-        const semId=`sem-${mesId}-${wk}`;
-        const start=(wk-1)*7+1;
-        const end=Math.min(wk*7,new Date(y,parseInt(mo)+1,0).getDate());
-        html+=`<div class="arch-sem">
-          <div class="arch-sem-hdr" onclick="toggleSem('${semId}')">
-            <span class="arch-sem-arrow" id="sarr-${semId}">›</span>
-            <span class="arch-sem-label">Semana ${start}–${end} de ${MONTHS[mo]}</span>
-            <span class="arch-sem-count">${tasks.length}</span>
-          </div>
-          <div class="arch-sem-body" id="${semId}">`;
-        tasks.forEach(t=>{
-          html+=`<div class="arch-card" onclick="openTareaModal('${escH(String(t.id))}')">
-            <div class="arch-card-bar" style="background:${barColor}"></div>
-            <div class="arch-card-title">${escH(t.titulo)}</div>
-            <span class="arch-card-tag">${escH(t.tipo||'Sin tipo')}</span>
-            ${t.entregado_at?`<span class="arch-card-date">${fmtDate(t.entregado_at)}</span>`:''}
-          </div>`;
+
+      if(total===0){
+        html+=`<div style="padding:12px 16px;font-size:12px;color:var(--text3);font-style:italic;">Sin entregas en ${MONTHS[mo]}</div>`;
+      } else {
+        Object.keys(weeks).sort((a,b)=>a-b).forEach(wk=>{
+          const tasks=weeks[wk];
+          const semId=`sem-${mesId}-${wk}`;
+          const start=(wk-1)*7+1;
+          const end=Math.min(wk*7,new Date(y,mo+1,0).getDate());
+          html+=`<div class="arch-sem">
+            <div class="arch-sem-hdr" onclick="toggleSem('${semId}')">
+              <span class="arch-sem-arrow" id="sarr-${semId}">›</span>
+              <span class="arch-sem-label">Semana ${start}–${end}</span>
+              <span class="arch-sem-count">${tasks.length}</span>
+            </div>
+            <div class="arch-sem-body" id="${semId}">`;
+          tasks.forEach(t=>{
+            html+=`<div class="arch-card" onclick="openTareaModal('${escH(String(t.id))}')">
+              <div class="arch-card-bar" style="background:${barColor}"></div>
+              <div class="arch-card-title">${escH(t.titulo)}</div>
+              <span class="arch-card-tag">${escH(t.tipo||'Sin tipo')}</span>
+              ${t.entregado_at?`<span class="arch-card-date">${fmtDate(t.entregado_at)}</span>`:''}
+            </div>`;
+          });
+          html+='</div></div>';
         });
-        html+='</div></div>';
-      });
+      }
       html+='</div></div>';
-    });
+    }
+    html+='</div></div>';
   });
-  box.innerHTML=html;
+
+  box.innerHTML=html||'<div class="arch-empty">No hay entregas registradas.</div>';
+}
+
+function toggleYear(id){
+  const body=document.getElementById(id);
+  const arr=document.getElementById('arr-'+id);
+  if(!body)return;
+  const open=body.style.display==='none'||body.style.display==='';
+  body.style.display=open?'block':'none';
+  if(arr)arr.classList.toggle('open',open);
 }
 
 function toggleMes(id){
